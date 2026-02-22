@@ -2,6 +2,8 @@
 
 GPU-accelerated audio transcription using [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (large-v3) with optional speaker diarization via [pyannote.audio](https://github.com/pyannote/pyannote-audio). Runs in Docker with NVIDIA GPU passthrough.
 
+![Screen Recording 2026-02-22 005431_50x](https://github.com/user-attachments/assets/77a4f308-b863-46d1-be04-67ed05666199)
+
 ## Modes
 
 **Multitrack** (e.g., Craig bot recordings): One audio file per speaker. No diarization needed - speaker identity comes from the filename. Produces per-speaker transcripts plus a merged timeline.
