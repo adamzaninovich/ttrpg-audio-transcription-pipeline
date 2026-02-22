@@ -6,7 +6,7 @@ GPU-accelerated audio transcription using [faster-whisper](https://github.com/SY
 
 ## Modes
 
-**Multitrack** (e.g., Craig bot recordings): One audio file per speaker. No diarization needed - speaker identity comes from the filename. Produces per-speaker transcripts plus a merged timeline.
+**Multitrack** (e.g., [Craig bot](https://craig.chat/) recordings): One audio file per speaker. No diarization needed - speaker identity comes from the filename. Produces per-speaker transcripts plus a merged timeline.
 
 **Single file** (e.g., phone/mic recording): One mixed audio file with multiple speakers. Uses pyannote diarization to separate speakers.
 
