@@ -1,0 +1,56 @@
+services:
+  transcribe:
+    build: .
+    image: transcribe:latest
+    pull_policy: never
+    container_name: transcribe
+    volumes:
+      - ./models:/models
+      - ./hf-cache:/hf-cache
+      - ${INPUT_DIR:-./input}:/input:ro
+      - ${OUTPUT_DIR:-./output}:/output
+    environment:
+      - MODEL_CACHE_DIR=/models
+      - HF_HOME=/hf-cache
+      - HF_TOKEN=${HF_TOKEN:-}
+      - SPEAKERS=${SPEAKERS:-1}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities:
+                - gpu
+    restart: no
+    profiles:
+      - manual
+  check:
+    build: .
+    image: transcribe:latest
+    pull_policy: never
+    container_name: transcribe-check
+    command:
+      - python3
+      - -c
+      - >
+        import faster_whisper; print(f'faster-whisper:
+        {faster_whisper.__version__}')
+
+        from pyannote.audio import Pipeline; print('pyannote: ok')
+
+        import torch; print(f'torch: {torch.__version__}')
+
+        print(f'cuda: {torch.cuda.is_available()}')
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities:
+                - gpu
+    restart: no
+    profiles:
+      - manual
+networks: {}
