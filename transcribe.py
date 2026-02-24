@@ -245,6 +245,50 @@ def merge_with_diarization(whisper_result: dict, diarization) -> list:
     return result_segments
 
 
+def resegment_by_time_gap(segments: list, max_gap: float = 1.5) -> list:
+    """Split segments into smaller ones when word-level timestamps show large gaps.
+
+    In multitrack recordings each speaker's file spans the full session, with
+    silence wherever they aren't speaking.  Whisper's VAD skips the silence but
+    its segmenter groups the surviving word islands into massive segments that
+    can span minutes.  This function walks each segment's word list and cuts a
+    new segment whenever consecutive words are separated by more than *max_gap*
+    seconds.
+
+    Segments without word-level timestamps pass through unchanged.
+    """
+    result = []
+    for seg in segments:
+        words = seg.get("words")
+        if not words:
+            result.append(seg)
+            continue
+
+        current_words = [words[0]]
+        for word in words[1:]:
+            if word["start"] - current_words[-1]["end"] > max_gap:
+                # Gap detected — emit accumulated words as a segment
+                result.append({
+                    "start": current_words[0]["start"],
+                    "end": current_words[-1]["end"],
+                    "text": "".join(w["word"] for w in current_words).strip(),
+                    "words": current_words,
+                })
+                current_words = [word]
+            else:
+                current_words.append(word)
+
+        # Emit final group
+        result.append({
+            "start": current_words[0]["start"],
+            "end": current_words[-1]["end"],
+            "text": "".join(w["word"] for w in current_words).strip(),
+            "words": current_words,
+        })
+
+    return result
+
+
 def write_json(result: dict, output_path: Path) -> None:
     """Write transcription result as JSON."""
     with open(output_path, "w", encoding="utf-8") as f:
@@ -428,8 +472,8 @@ def main():
                 print(f"  Found {len(unique_speakers)} speaker(s): {', '.join(sorted(unique_speakers))}")
             else:
                 wav_path.unlink(missing_ok=True)
-                # No diarization — tag all segments with filename as speaker
-                segments = whisper_result["segments"]
+                # No diarization — re-segment by time gaps and tag with filename
+                segments = resegment_by_time_gap(whisper_result["segments"])
                 for seg in segments:
                     seg["speaker"] = speaker_label
 
