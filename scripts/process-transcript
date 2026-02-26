@@ -1,0 +1,247 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+WEBHOOK_URL="https://n8n.protogen.cloud/webhook/process-transcript"
+WEBHOOK_TEST_URL="https://n8n.protogen.cloud/webhook-test/process-transcript"
+TOKEN_FILE="/run/secrets/n8n-webhook-token"
+if [[ ! -f "${TOKEN_FILE}" ]]; then
+  echo "Error: Auth token not found at ${TOKEN_FILE}" >&2
+  echo "Is sops-nix configured? Try: sudo nixos-rebuild switch" >&2
+  exit 1
+fi
+N8N_TOKEN=$(tr -d '[:space:]' < "${TOKEN_FILE}")
+
+usage() {
+  echo "Usage: process-transcript [OPTIONS] <session-directory>"
+  echo ""
+  echo "Send a transcript JSON to n8n for processing into structured notes."
+  echo ""
+  echo "Looks for transcripts in <session-directory>/transcripts/."
+  echo "Uses merged.json if present, otherwise the single .json file."
+  echo ""
+  echo "Output is written to <session-directory>/<dirname>-notes.md"
+  echo ""
+  echo "Options:"
+  echo "  -t, --test      Use the n8n test webhook URL"
+  echo "  -h, --help      Show this help message"
+  echo ""
+  echo "Speaker mapping is saved to <session-directory>/transcripts/speaker_mapping.json"
+  echo "and reused on subsequent runs. Delete the file to re-prompt."
+  echo ""
+  echo "Examples:"
+  echo "  process-transcript ~/sessions/session-1/"
+  echo "  process-transcript ."
+  exit 0
+}
+
+while [[ ${#} -gt 0 ]]; do
+  case "${1}" in
+    -t|--test) WEBHOOK_URL="${WEBHOOK_TEST_URL}"; shift ;;
+    -h|--help) usage ;;
+    -*) echo "Unknown option: ${1}" >&2; exit 1 ;;
+    *) break ;;
+  esac
+done
+
+if [[ ${#} -lt 1 ]]; then
+  echo "Error: No session directory specified" >&2
+  echo "" >&2
+  usage
+fi
+
+session_dir="$(realpath "${1}")"
+
+if [[ ! -d "${session_dir}" ]]; then
+  echo "Error: Not a directory: ${session_dir}" >&2
+  exit 1
+fi
+
+transcript_dir="${session_dir}/transcripts"
+if [[ ! -d "${transcript_dir}" ]]; then
+  echo "Error: No transcripts directory found at ${transcript_dir}" >&2
+  exit 1
+fi
+
+# Find the transcript JSON: prefer merged.json, fall back to single .json
+if [[ -f "${transcript_dir}/merged.json" ]]; then
+  json_file="${transcript_dir}/merged.json"
+else
+  json_files=()
+  for f in "${transcript_dir}"/*.json; do
+    [[ -f "${f}" ]] && [[ "$(basename "${f}")" != "speaker_mapping.json" ]] && json_files+=("${f}")
+  done
+
+  if [[ ${#json_files[@]} -eq 0 ]]; then
+    echo "Error: No JSON files found in ${transcript_dir}" >&2
+    exit 1
+  elif [[ ${#json_files[@]} -gt 1 ]]; then
+    echo "Error: Multiple JSON files found but no merged.json" >&2
+    echo "Files found:" >&2
+    for f in "${json_files[@]}"; do
+      echo "  - $(basename "${f}")" >&2
+    done
+    echo "Run transcribe-audio with multiple tracks to generate merged.json" >&2
+    exit 1
+  fi
+
+  json_file="${json_files[0]}"
+fi
+
+# Output file: <session-dir>/<dirname>-notes.md
+dir_name="$(basename "${session_dir}")"
+output_file="${session_dir}/${dir_name}-notes.md"
+
+echo "Transcript: $(basename "${json_file}")"
+
+# Check for diarized transcript (SPEAKER_XX labels)
+SPEAKER_MAP_JSON=""
+mapping_file="${transcript_dir}/speaker_mapping.json"
+has_diarization=$(jq -r '[.segments[].speaker // empty] | map(select(test("^SPEAKER_"))) | length > 0' "${json_file}")
+
+if [[ -f "${mapping_file}" ]]; then
+  # Load saved mapping
+  SPEAKER_MAP_JSON=$(jq -c . "${mapping_file}")
+  names=$(echo "${SPEAKER_MAP_JSON}" | jq -r '[.[]] | join(", ")')
+  echo "Loaded speaker mapping: ${names}"
+
+elif [[ "${has_diarization}" == "true" ]] && [ -t 0 ]; then
+  # Get speakers sorted by segment count descending (most active first)
+  speaker_info=$(jq -r '
+    [.segments[] | select(.speaker // "" | test("^SPEAKER_"))] |
+    group_by(.speaker) |
+    map({speaker: .[0].speaker, count: length}) |
+    sort_by(-.count) |
+    .[] |
+    "\(.speaker):\(.count)"
+  ' "${json_file}")
+
+  most_active=$(echo "${speaker_info}" | head -1 | cut -d: -f1)
+
+  # Show a contiguous block of ~5 segments for a speaker
+  # page parameter (0-indexed) selects different regions each round
+  show_sample_block() {
+    local spk="${1}"
+    local page="${2:-0}"
+    jq -r --arg spk "${spk}" --argjson page "${page}" '
+      [.segments[] | select(.speaker == $spk and (.text | length) > 15)] |
+      if length == 0 then empty
+      else
+        (length / 5 | floor | if . < 1 then 1 else . end) as $blocks |
+        ($page % $blocks) as $block_idx |
+        (length / $blocks | floor) as $block_size |
+        .[$block_idx * $block_size : $block_idx * $block_size + 5] |
+        .[] |
+        "  \"\(.text | ltrimstr(" "))\""
+      end
+    ' "${json_file}"
+  }
+
+  declare -A name_map
+
+  # Build array of speaker:count entries
+  unassigned=()
+  while IFS= read -r line; do
+    [[ -n "${line}" ]] && unassigned+=("${line}")
+  done <<< "${speaker_info}"
+
+  round=0
+  while [[ ${#unassigned[@]} -gt 0 ]]; do
+    if [[ "${round}" -eq 0 ]]; then
+      echo "Diarized transcript detected — map speakers to names."
+    else
+      echo "Remaining ${#unassigned[@]} speaker(s) — showing more samples:"
+    fi
+    echo ""
+
+    still_unassigned=()
+    for entry in "${unassigned[@]}"; do
+      speaker="${entry%%:*}"
+      count="${entry#*:}"
+      hint=""
+      if [[ "${speaker}" == "${most_active}" ]]; then
+        hint=" — most active, likely GM"
+      fi
+
+      echo "${speaker} (${count} segments${hint}):"
+      show_sample_block "${speaker}" "${round}"
+      echo ""
+
+      read -rp "${speaker} → Name (enter to see more): " name
+      if [[ -n "${name}" ]]; then
+        name_map["${speaker}"]="${name}"
+      else
+        still_unassigned+=("${entry}")
+      fi
+      echo ""
+    done
+
+    unassigned=("${still_unassigned[@]}")
+    round=$((round + 1))
+  done
+
+  # Build speaker map JSON
+  SPEAKER_MAP_JSON="{"
+  first=1
+  for speaker in "${!name_map[@]}"; do
+    if [[ "${first}" -eq 1 ]]; then
+      first=0
+    else
+      SPEAKER_MAP_JSON+=","
+    fi
+    escaped_name=$(printf '%s' "${name_map[$speaker]}" | sed 's/"/\\"/g')
+    SPEAKER_MAP_JSON+="\"${speaker}\":\"${escaped_name}\""
+  done
+  SPEAKER_MAP_JSON+="}"
+
+  # Save mapping for reuse
+  echo "${SPEAKER_MAP_JSON}" | jq . > "${mapping_file}"
+
+  # Show summary
+  names=$(echo "${SPEAKER_MAP_JSON}" | jq -r '[.[]] | join(", ")')
+  echo "Speaker map: ${names}"
+fi
+
+# Confirm before sending (only when speaker mapping is involved)
+if [[ -n "${SPEAKER_MAP_JSON}" ]] && [ -t 0 ]; then
+  echo ""
+  echo "${SPEAKER_MAP_JSON}" | jq -r 'to_entries[] | "  \(.key) → \(.value)"'
+  echo ""
+  if [[ "${WEBHOOK_URL}" == *"webhook-test"* ]]; then
+    echo "Ready to send to n8n (TEST endpoint)."
+  else
+    echo "Ready to send to n8n for processing."
+  fi
+  read -rp "Proceed? [Y/n] " confirm
+  if [[ "${confirm}" =~ ^[Nn] ]]; then
+    echo "Aborted. Mapping saved to ${mapping_file} — edit or delete it and re-run."
+    exit 0
+  fi
+  echo ""
+else
+  if [[ "${WEBHOOK_URL}" == *"webhook-test"* ]]; then
+    echo "Sending to n8n (TEST endpoint)..."
+  else
+    echo "Sending to n8n for processing..."
+  fi
+  echo ""
+fi
+
+# Build curl arguments
+curl_args=(
+  --max-time 1800
+  -X POST "${WEBHOOK_URL}"
+  -H "Authorization: ${N8N_TOKEN}"
+  -F "file=@${json_file}"
+  -o "${output_file}"
+  --fail-with-body
+  --progress-bar
+)
+
+if [[ -n "${SPEAKER_MAP_JSON}" ]]; then
+  curl_args+=(-F "speaker_map=${SPEAKER_MAP_JSON}")
+fi
+
+curl "${curl_args[@]}"
+
+echo ""
+echo "Notes written to: ${output_file}"
