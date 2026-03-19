@@ -53,4 +53,26 @@ services:
     restart: no
     profiles:
       - manual
+  serve:
+    build: .
+    image: transcribe:latest
+    pull_policy: never
+    command: uvicorn server:app --host 0.0.0.0 --port 8000 --workers 1
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/models
+    environment:
+      - MODEL_CACHE_DIR=/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities:
+                - gpu
+    restart: no
+    profiles:
+      - manual
 networks: {}
