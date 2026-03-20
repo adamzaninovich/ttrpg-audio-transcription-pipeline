@@ -14,6 +14,7 @@ import tempfile
 import threading
 import time
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import AsyncGenerator
@@ -47,7 +48,9 @@ class Job:
     _event: threading.Event = field(default_factory=threading.Event)
 
 
-jobs: dict[str, Job] = {}
+MAX_FINISHED_JOBS = 10
+
+jobs: OrderedDict[str, Job] = OrderedDict()
 job_queue: queue.Queue[str] = queue.Queue()
 
 
@@ -183,6 +186,11 @@ async def create_job(
     job.events.append({"type": "queued"})
     jobs[job_id] = job
     job_queue.put(job_id)
+
+    # Evict oldest finished jobs beyond the cap
+    finished = [k for k, j in jobs.items() if j.status in ("done", "failed")]
+    for k in finished[:-MAX_FINISHED_JOBS]:
+        del jobs[k]
 
     return JSONResponse({"job_id": job_id})
 
