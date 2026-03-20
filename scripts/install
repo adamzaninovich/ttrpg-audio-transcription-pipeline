@@ -25,7 +25,7 @@ if [[ ! -f Dockerfile ]]; then
 fi
 
 echo "Building image..."
-docker build -t transcribe:latest .
+docker build --target base -t transcribe:latest .
 
 echo "Creating $DEST..."
 mkdir -p "$DEST/models"

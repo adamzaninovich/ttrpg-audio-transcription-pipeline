@@ -1,7 +1,9 @@
 services:
   transcribe:
-    build: .
-    image: transcribe:latest
+    build:
+      context: .
+      target: full
+    image: transcribe:full
     pull_policy: never
     container_name: transcribe
     volumes:
@@ -26,8 +28,10 @@ services:
     profiles:
       - manual
   check:
-    build: .
-    image: transcribe:latest
+    build:
+      context: .
+      target: full
+    image: transcribe:full
     pull_policy: never
     container_name: transcribe-check
     command:
@@ -54,7 +58,9 @@ services:
     profiles:
       - manual
   serve:
-    build: .
+    build:
+      context: .
+      target: base
     image: transcribe:latest
     pull_policy: never
     command: uvicorn server:app --host 0.0.0.0 --port 8000 --workers 1
