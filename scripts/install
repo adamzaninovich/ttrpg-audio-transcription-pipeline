@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# install — build the transcribe image and set up a run directory
+#
+# Usage: ./install <destination>
+# Example: ./install /opt/stacks/transcribe
+# ---------------------------------------------------------------------------
+
+if [[ $# -ne 1 ]]; then
+  echo "Usage: $0 <destination>" >&2
+  exit 1
+fi
+
+DEST="${1%/}"   # strip trailing slash
+
+# Run from the project root (parent of scripts/)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR/.."
+
+if [[ ! -f Dockerfile ]]; then
+  echo "Error: Dockerfile not found in $(pwd)" >&2
+  exit 1
+fi
+
+echo "Building image..."
+docker build -t transcribe:latest .
+
+echo "Creating $DEST..."
+mkdir -p "$DEST/models"
+
+echo "Writing compose.yaml..."
+cat > "$DEST/compose.yaml" <<'EOF'
+services:
+  serve:
+    image: transcribe:latest
+    pull_policy: never
+    command: uvicorn server:app --host 0.0.0.0 --port 8000 --workers 1
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/models
+    environment:
+      - MODEL_CACHE_DIR=/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities:
+                - gpu
+    restart: unless-stopped
+networks: {}
+EOF
+
+echo ""
+echo "Installed to $DEST"
+echo ""
+echo "  cd $DEST && docker compose up -d"
+echo ""

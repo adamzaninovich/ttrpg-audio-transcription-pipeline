@@ -15,7 +15,7 @@ docker compose run --rm transcribe
 **HTTP service** — accepts uploads, streams progress via SSE, returns transcript JSON. Intended for programmatic use (e.g., a Phoenix/Elixir app on the same LAN):
 
 ```bash
-docker compose up serve
+docker compose up -d
 ```
 
 ## Requirements
@@ -23,12 +23,21 @@ docker compose up serve
 - Docker with NVIDIA GPU runtime (Docker Desktop or nvidia-container-toolkit)
 - NVIDIA GPU with ~3GB VRAM
 
+## Installation
+
+This repo is the build/development directory. Use the install script to deploy the app to a run directory (e.g. `/opt/stacks/transcribe`):
+
+```bash
+scripts/install /opt/stacks/transcribe
+```
+
+This builds the Docker image, creates the destination directory, and writes a `compose.yaml` there. Run everything from the install directory — the source tree is not needed at runtime.
+
+To update after making changes, re-run the install script.
+
 ## CLI usage
 
 ```bash
-# Build the image
-docker compose build transcribe
-
 # Transcribe all audio files in a directory
 INPUT_DIR=/path/to/audio OUTPUT_DIR=/path/to/output \
   docker compose run --rm transcribe
@@ -52,8 +61,7 @@ The `serve` Docker service exposes a REST API on port 8000. Jobs are processed o
 ### Start the server
 
 ```bash
-docker compose build transcribe   # build image (shared with CLI)
-docker compose up serve           # starts uvicorn on :8000
+docker compose up -d
 ```
 
 ### Submit a job
