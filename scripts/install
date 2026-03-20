@@ -25,7 +25,6 @@ if [[ ! -f Dockerfile ]]; then
 fi
 
 echo "Building image..."
-docker builder prune -f --filter type=regular 2>/dev/null || true
 docker build --target base -t transcribe:latest .
 
 echo "Creating $DEST..."
