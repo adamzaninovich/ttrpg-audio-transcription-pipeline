@@ -1,50 +1,36 @@
 # transcribe
 
-GPU-accelerated audio transcription using [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (large-v3) with optional speaker diarization via [pyannote.audio](https://github.com/pyannote/pyannote-audio). Runs in Docker with NVIDIA GPU passthrough.
+GPU-accelerated audio transcription using [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (large-v3). Runs in Docker with NVIDIA GPU passthrough. Primary use case is TTRPG session recordings from [Craig bot](https://craig.chat/) — one audio file per speaker, producing per-speaker transcripts plus a merged timeline.
 
 ![Screen Recording 2026-02-22 005431_50x](https://github.com/user-attachments/assets/77a4f308-b863-46d1-be04-67ed05666199)
 
-## Modes
+## Usage modes
 
-**Multitrack** (e.g., [Craig bot](https://craig.chat/) recordings): One audio file per speaker. No diarization needed - speaker identity comes from the filename. Produces per-speaker transcripts plus a merged timeline.
+**CLI** — batch transcription, writes JSON + SRT to disk:
 
-**Single file** (e.g., phone/mic recording): One mixed audio file with multiple speakers. Uses pyannote diarization to separate speakers.
+```bash
+docker compose run --rm transcribe
+```
+
+**HTTP service** — accepts uploads, streams progress via SSE, returns transcript JSON. Intended for programmatic use (e.g., a Phoenix/Elixir app on the same LAN):
+
+```bash
+docker compose up serve
+```
 
 ## Requirements
 
 - Docker with NVIDIA GPU runtime (Docker Desktop or nvidia-container-toolkit)
-- NVIDIA GPU with enough VRAM for the models (~5GB, see [Memory](#memory))
-- [HuggingFace token](https://huggingface.co/settings/tokens) (only for diarization)
+- NVIDIA GPU with ~3GB VRAM
 
-### HuggingFace setup (diarization only)
-
-Create a `.env` file:
-
-```
-HF_TOKEN=hf_your_token_here
-```
-
-Accept the model licenses:
-- [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1)
-- [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0)
-- [pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1)
-
-## Usage
+## CLI usage
 
 ```bash
 # Build the image
 docker compose build transcribe
 
-# Multitrack - one file per speaker, no diarization
+# Transcribe all audio files in a directory
 INPUT_DIR=/path/to/audio OUTPUT_DIR=/path/to/output \
-  docker compose run --rm transcribe
-
-# Single file - diarize into 5 speakers
-INPUT_DIR=/path/to/audio OUTPUT_DIR=/path/to/output SPEAKERS=5 \
-  docker compose run --rm transcribe
-
-# Speaker range - let pyannote decide within bounds
-INPUT_DIR=/path/to/audio OUTPUT_DIR=/path/to/output SPEAKERS=3-7 \
   docker compose run --rm transcribe
 ```
 
@@ -54,12 +40,84 @@ INPUT_DIR=/path/to/audio OUTPUT_DIR=/path/to/output SPEAKERS=3-7 \
 |----------|---------|-------------|
 | `INPUT_DIR` | `./input` | Directory containing audio files |
 | `OUTPUT_DIR` | `./output` | Directory for transcript output |
-| `SPEAKERS` | `1` | `1` = no diarization, `N` = exact count, `MIN-MAX` = range |
-| `HF_TOKEN` | | HuggingFace token (required when `SPEAKERS` > 1) |
 
 ### Supported formats
 
 flac, wav, mp3, ogg, m4a, opus, webm
+
+## HTTP service
+
+The `serve` Docker service exposes a REST API on port 8000. Jobs are processed one at a time (GPU bottleneck); progress streams via SSE.
+
+### Start the server
+
+```bash
+docker compose build transcribe   # build image (shared with CLI)
+docker compose up serve           # starts uvicorn on :8000
+```
+
+### Submit a job
+
+```bash
+curl -X POST http://localhost:8000/jobs \
+  -F "files[]=@GM.flac" \
+  -F "files[]=@Kai.flac" \
+  -F "files[]=@Milo.flac"
+# → {"job_id": "a1b2c3d4"}
+```
+
+Include an optional vocab hint file:
+
+```bash
+curl -X POST http://localhost:8000/jobs \
+  -F "files[]=@GM.flac" \
+  -F "vocab=Xanathar, Phandalin, Eldritch Blast"
+```
+
+### Stream progress (SSE)
+
+```bash
+curl -N http://localhost:8000/jobs/a1b2c3d4/events
+```
+
+Event stream:
+
+```
+data: {"type": "queued"}
+data: {"type": "file_start", "file": "GM.flac", "index": 0, "total": 3}
+data: {"type": "progress", "pct": 12}
+data: {"type": "progress", "pct": 34}
+...
+data: {"type": "file_done", "file": "GM.flac", "duration": 3600.0, "elapsed": 480.1}
+data: {"type": "file_start", "file": "Kai.flac", "index": 1, "total": 3}
+...
+data: {"type": "done", "result": { ... merged transcript JSON ... }}
+```
+
+On failure: `data: {"type": "error", "error": "message"}`
+
+### Poll for status
+
+```bash
+curl http://localhost:8000/jobs/a1b2c3d4
+# → {"status": "running", "result": null, "error": null}
+# → {"status": "done",    "result": { ... }, "error": null}
+# → {"status": "failed",  "result": null, "error": "message"}
+```
+
+### Result format
+
+For multiple files, `result` is the merged transcript:
+
+```json
+{
+  "speakers": ["GM", "Kai", "Milo"],
+  "duration": 10842.5,
+  "segments": [ ... ]
+}
+```
+
+For a single file, `result` is the per-speaker shape (same as the CLI JSON output).
 
 ## Output
 
@@ -71,7 +129,7 @@ output/
   speaker1.srt      # subtitle file
   speaker2.json
   speaker2.srt
-  merged.json       # all speakers sorted by timestamp (multitrack only)
+  merged.json       # all speakers sorted by timestamp
   merged.srt
 ```
 
@@ -84,7 +142,6 @@ output/
   "language": "en",
   "language_probability": 0.9987,
   "duration": 10842.528,
-  "diarization": false,
   "segments": [
     {
       "speaker": "speaker1",
@@ -117,30 +174,10 @@ Eldritch Blast
 
 Terms are joined and passed to Whisper's `initial_prompt`, which conditions the model to prefer these spellings when it hears something phonetically similar. Keep to roughly 20-50 terms (the prompt shares Whisper's 448-token context window).
 
-## Pipeline
-
-For each audio file:
-
-1. **WAV conversion**: ffmpeg converts input to 16kHz mono WAV (used by both whisper and diarization)
-2. **Transcription**: Whisper large-v3 on GPU (float16) with word-level timestamps and VAD filter
-3. **Model swap**: Whisper unloaded from VRAM, then pyannote loaded (only one model at a time)
-4. **Diarization** (if enabled): Audio loaded into memory as a waveform tensor, then pyannote runs speaker diarization with batch sizes of 32
-5. **Speaker assignment**: Each word assigned to a speaker using overlap duration with diarization turns. Fallback: nearest turn within 0.5s
-6. **Re-segmentation**: Consecutive words from the same speaker grouped into segments, correctly splitting whisper segments that span speaker turns
-7. **Output**: Per-speaker JSON + SRT. Multitrack mode also writes merged JSON + SRT sorted by timestamp
-
-### Why in-memory waveforms?
-
-Pyannote's default behavior calls `torchaudio.load()` with `crop()` for every tiny audio slice during diarization - thousands of disk I/O calls. Loading the full WAV into memory first and passing it as `{"waveform": tensor, "sample_rate": 16000}` eliminates this bottleneck entirely. Diarization of a 3-hour file went from 5+ hours to ~1.5 minutes.
-
-## Memory
-
-Whisper large-v3 uses ~3GB VRAM. Pyannote uses ~2GB. They run sequentially (not simultaneously) to fit on GPUs with limited VRAM. System RAM usage peaks during the in-memory waveform load (~1GB for a 3-hour 16kHz mono WAV).
-
 ## Verify setup
 
 ```bash
 docker compose run --rm check
 ```
 
-Prints versions of faster-whisper, pyannote, torch, and CUDA availability.
+Prints versions of faster-whisper, torch, and CUDA availability.
