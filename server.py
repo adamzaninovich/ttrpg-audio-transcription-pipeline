@@ -31,12 +31,6 @@ from transcribe import (
 
 app = FastAPI(title="Transcription Service")
 
-
-@app.get("/version")
-async def version():
-    return {"version": "2"}
-
-
 # ---------------------------------------------------------------------------
 # Job state
 # ---------------------------------------------------------------------------
@@ -131,11 +125,7 @@ def _run_job(job: Job) -> None:
             }
             srt_path = workdir / f"{r.speaker_label}.srt"
 
-        print(f"SRT path: {srt_path}, exists: {srt_path.exists()}")
-        srt_text = srt_path.read_text(encoding="utf-8")
-        print(f"SRT length: {len(srt_text)}")
-        final_result["srt"] = srt_text
-        print(f"Result keys after SRT: {list(final_result.keys())}")
+        final_result["srt"] = srt_path.read_text(encoding="utf-8")
         job.result = final_result
         job.status = "done"
         emit({"type": "done", "result": final_result})
