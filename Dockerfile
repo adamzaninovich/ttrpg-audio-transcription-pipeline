@@ -14,6 +14,7 @@ RUN pip3 install --no-cache-dir --break-system-packages \
 RUN find /opt/nvidia/entrypoint.d/ -maxdepth 1 ! -name '*gpu*' -type f -delete
 
 WORKDIR /app
+ARG CACHEBUST
 COPY transcribe.py /app/transcribe.py
 COPY server.py /app/server.py
 
