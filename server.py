@@ -27,7 +27,6 @@ from transcribe import (
     load_vocab,
     process_file,
     write_merged_output,
-    write_outputs,
 )
 
 app = FastAPI(title="Transcription Service")
@@ -113,8 +112,8 @@ def _run_job(job: Job) -> None:
             results.append(result)
 
         if len(results) > 1:
-            merged = write_merged_output(results, config)
-            final_result = merged
+            final_result = write_merged_output(results, config)
+            srt_path = workdir / "merged.srt"
         else:
             r = results[0]
             final_result = {
@@ -124,7 +123,9 @@ def _run_job(job: Job) -> None:
                 "diarization": False,
                 "segments": r.segments,
             }
+            srt_path = workdir / f"{r.speaker_label}.srt"
 
+        final_result["srt"] = srt_path.read_text(encoding="utf-8")
         job.result = final_result
         job.status = "done"
         emit({"type": "done", "result": final_result})
