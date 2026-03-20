@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y \
 
 RUN pip3 install --no-cache-dir --break-system-packages \
     faster-whisper==1.1.0 \
-    fastapi "uvicorn[standard]"
+    fastapi "uvicorn[standard]" requests
 
 # Suppress NVIDIA banners/notices on container start, keep GPU driver check
 RUN find /opt/nvidia/entrypoint.d/ -maxdepth 1 ! -name '*gpu*' -type f -delete
