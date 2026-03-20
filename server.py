@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import AsyncGenerator
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from transcribe import (
@@ -168,22 +168,17 @@ _worker_thread.start()
 @app.post("/jobs")
 async def create_job(
     files: list[UploadFile] = File(..., alias="files[]"),
-    vocab: str | None = Form(None),
 ) -> JSONResponse:
-    """Accept audio files + optional vocab, enqueue a transcription job."""
+    """Accept audio files + optional vocab.txt, enqueue a transcription job."""
     job_id = uuid.uuid4().hex[:8]
     workdir = tempfile.mkdtemp(prefix=f"trans_{job_id}_")
 
-    # Save uploaded files
+    # Save uploaded files (audio + optional vocab.txt)
     for upload in files:
         dest = Path(workdir) / upload.filename
         with open(dest, "wb") as f:
             content = await upload.read()
             f.write(content)
-
-    # Save vocab if provided
-    if vocab:
-        (Path(workdir) / "vocab.txt").write_text(vocab, encoding="utf-8")
 
     job = Job(id=job_id, status="queued", workdir=workdir)
     job.events.append({"type": "queued"})

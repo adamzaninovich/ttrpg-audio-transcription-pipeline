@@ -18,7 +18,7 @@ COPY transcribe.py /app/transcribe.py
 COPY server.py /app/server.py
 
 # Fail the build if any import is missing
-RUN python3 -c "from faster_whisper import WhisperModel; from fastapi import FastAPI, File, Form"
+RUN python3 -c "from faster_whisper import WhisperModel; from fastapi import FastAPI, File"
 
 CMD ["python3", "/app/transcribe.py"]
 
