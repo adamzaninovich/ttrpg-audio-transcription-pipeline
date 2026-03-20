@@ -547,7 +547,6 @@ def write_merged_output(results: list[FileResult], config: Config) -> dict:
     merged_result = {
         "speakers": [r.speaker_label for r in results],
         "duration": max_duration,
-        "diarization": config.use_diarization,
         "segments": merged_segments,
     }
 

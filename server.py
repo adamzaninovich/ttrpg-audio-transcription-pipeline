@@ -117,10 +117,8 @@ def _run_job(job: Job) -> None:
         else:
             r = results[0]
             final_result = {
-                "speaker": r.speaker_label,
-                "audio_file": r.audio_file,
+                "speakers": [r.speaker_label],
                 "duration": r.duration,
-                "diarization": False,
                 "segments": r.segments,
             }
             srt_path = workdir / f"{r.speaker_label}.srt"
