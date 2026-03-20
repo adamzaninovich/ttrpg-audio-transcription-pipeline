@@ -20,7 +20,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, NamedTuple, TypedDict
 
-import torch
 from faster_whisper import WhisperModel
 
 warnings.filterwarnings("ignore")
@@ -172,13 +171,18 @@ def whisper_model(config: Config):
         yield model
     finally:
         del model
-        torch.cuda.empty_cache()
+        try:
+            import torch
+            torch.cuda.empty_cache()
+        except ImportError:
+            pass
         gc.collect()
 
 
 @contextmanager
 def diarization_pipeline(config: Config):
     """Load pyannote diarization pipeline on CUDA, yield it, then free VRAM."""
+    import torch
     from pyannote.audio import Pipeline
 
     torch.zeros(1).cuda()
