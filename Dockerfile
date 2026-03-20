@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y \
 
 RUN pip3 install --no-cache-dir --break-system-packages \
     faster-whisper==1.1.0 \
-    fastapi "uvicorn[standard]" requests
+    fastapi "uvicorn[standard]" requests python-multipart
 
 # Suppress NVIDIA banners/notices on container start, keep GPU driver check
 RUN find /opt/nvidia/entrypoint.d/ -maxdepth 1 ! -name '*gpu*' -type f -delete
@@ -16,6 +16,9 @@ RUN find /opt/nvidia/entrypoint.d/ -maxdepth 1 ! -name '*gpu*' -type f -delete
 WORKDIR /app
 COPY transcribe.py /app/transcribe.py
 COPY server.py /app/server.py
+
+# Fail the build if any import is missing
+RUN python3 -c "from faster_whisper import WhisperModel; from fastapi import FastAPI, File, Form"
 
 CMD ["python3", "/app/transcribe.py"]
 
