@@ -348,7 +348,9 @@ def transcribe_file(model: WhisperModel, audio_path: Path,
         language="en",
         word_timestamps=True,
         vad_filter=True,
-        vad_parameters=dict(threshold=0.3, speech_pad_ms=400),
+        # speech_pad_ms > default (400ms) to avoid clipping speech onsets —
+        # VAD fires late on quiet starts, so we pad aggressively upstream.
+        vad_parameters=dict(speech_pad_ms=800),
         condition_on_previous_text=False,
         no_repeat_ngram_size=3,
     )
