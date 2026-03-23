@@ -348,6 +348,7 @@ def transcribe_file(model: WhisperModel, audio_path: Path,
         language="en",
         word_timestamps=True,
         vad_filter=True,
+        vad_parameters=dict(threshold=0.3, speech_pad_ms=400),
         condition_on_previous_text=False,
         no_repeat_ngram_size=3,
     )
