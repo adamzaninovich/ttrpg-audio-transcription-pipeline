@@ -348,6 +348,8 @@ def transcribe_file(model: WhisperModel, audio_path: Path,
         language="en",
         word_timestamps=True,
         vad_filter=True,
+        condition_on_previous_text=False,
+        no_repeat_ngram_size=3,
     )
     if initial_prompt:
         transcribe_kwargs["initial_prompt"] = initial_prompt
