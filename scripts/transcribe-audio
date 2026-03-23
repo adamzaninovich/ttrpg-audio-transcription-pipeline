@@ -138,16 +138,16 @@ echo ""
 # Ensure Docker image is built
 if [[ "${VERBOSE}" -eq 1 ]]; then
   echo "Building Docker image..."
-  docker compose -f "${COMPOSE_FILE}" build transcribe
+  /usr/bin/docker compose -f "${COMPOSE_FILE}" build transcribe
 else
   echo "Building Docker image (use -v to show build output)..."
-  docker compose -f "${COMPOSE_FILE}" build --quiet transcribe
+  /usr/bin/docker compose -f "${COMPOSE_FILE}" build --quiet transcribe
 fi
 
 # Run transcription
 INPUT_DIR="${input_dir}" OUTPUT_DIR="${output_dir}" \
   HF_TOKEN="${HF_TOKEN}" SPEAKERS="${SPEAKERS}" \
-  docker compose -f "${COMPOSE_FILE}" run --rm transcribe
+  /usr/bin/docker compose -f "${COMPOSE_FILE}" run --rm transcribe
 
 echo "Transcripts written to: ${output_dir}"
 

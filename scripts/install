@@ -25,7 +25,7 @@ if [[ ! -f Dockerfile ]]; then
 fi
 
 echo "Building image..."
-docker build --target base -t transcribe:latest .
+/usr/bin/docker build --target base -t transcribe:latest .
 
 echo "Creating $DEST..."
 mkdir -p "$DEST/models"
@@ -58,5 +58,5 @@ EOF
 echo ""
 echo "Installed to $DEST"
 echo ""
-echo "  cd $DEST && docker compose up -d"
+echo "  cd $DEST && /usr/bin/docker compose up -d"
 echo ""
