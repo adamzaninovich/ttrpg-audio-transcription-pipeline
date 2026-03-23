@@ -25,6 +25,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from transcribe import (
     Config,
     FileResult,
+    JobCancelledError,
     load_vocab,
     process_file,
     write_merged_output,
@@ -40,12 +41,13 @@ app = FastAPI(title="Transcription Service")
 @dataclass
 class Job:
     id: str
-    status: str  # "queued" | "running" | "done" | "failed"
+    status: str  # "queued" | "running" | "done" | "failed" | "cancelled"
     result: dict | None = None
     error: str | None = None
     workdir: str | None = None
     events: list[dict] = field(default_factory=list)
     _event: threading.Event = field(default_factory=threading.Event)
+    _cancel: threading.Event = field(default_factory=threading.Event)
 
 
 MAX_FINISHED_JOBS = 10
@@ -111,6 +113,7 @@ def _run_job(job: Job) -> None:
                 on_event=emit,
                 file_index=i,
                 file_total=len(audio_files),
+                cancel_event=job._cancel,
             )
             results.append(result)
 
@@ -131,6 +134,10 @@ def _run_job(job: Job) -> None:
         job.status = "done"
         emit({"type": "done", "result": final_result})
 
+    except JobCancelledError:
+        job.status = "cancelled"
+        emit({"type": "cancelled"})
+
     except Exception as exc:
         job.status = "failed"
         job.error = str(exc)
@@ -148,6 +155,8 @@ def _worker() -> None:
         job_id = job_queue.get()
         job = jobs.get(job_id)
         if job is None:
+            continue
+        if job.status == "cancelled":
             continue
         try:
             _run_job(job)
@@ -209,9 +218,9 @@ async def job_events(job_id: str) -> StreamingResponse:
             for ev in new:
                 yield f"data: {json.dumps(ev)}\n\n"
                 cursor += 1
-                if ev.get("type") in ("done", "error"):
+                if ev.get("type") in ("done", "error", "cancelled"):
                     return
-            if job.status in ("done", "failed") and cursor >= len(job.events):
+            if job.status in ("done", "failed", "cancelled") and cursor >= len(job.events):
                 break
             await asyncio.sleep(0.2)
 
@@ -229,3 +238,26 @@ async def get_job(job_id: str) -> JSONResponse:
         "result": job.result,
         "error": job.error,
     })
+
+
+@app.delete("/jobs/{job_id}")
+async def cancel_job(job_id: str) -> JSONResponse:
+    """Cancel a queued or running job.
+
+    Queued jobs are marked cancelled immediately and skipped by the worker.
+    Running jobs receive a cancel signal and stop after the current whisper
+    segment completes (typically within a few seconds).
+    """
+    job = jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status in ("done", "failed", "cancelled"):
+        raise HTTPException(status_code=409, detail=f"Job already {job.status}")
+
+    job._cancel.set()
+    if job.status == "queued":
+        job.status = "cancelled"
+        job.events.append({"type": "cancelled"})
+        job._event.set()
+
+    return JSONResponse({"job_id": job_id, "status": "cancelling"})

@@ -24,6 +24,10 @@ from faster_whisper import WhisperModel
 
 warnings.filterwarnings("ignore")
 
+
+class JobCancelledError(Exception):
+    """Raised when a transcription job is cancelled via the HTTP API."""
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -335,7 +339,8 @@ def group_words_into_segments(words: list[Word],
 
 def transcribe_file(model: WhisperModel, audio_path: Path,
                     initial_prompt: str | None = None,
-                    on_event: Callable[[dict], None] | None = None) -> TranscriptionResult:
+                    on_event: Callable[[dict], None] | None = None,
+                    cancel_event=None) -> TranscriptionResult:
     """Transcribe a single audio file and return structured result."""
     from rich.progress import Progress, BarColumn, TimeRemainingColumn, TextColumn
 
@@ -361,6 +366,8 @@ def transcribe_file(model: WhisperModel, audio_path: Path,
         task = progress.add_task("transcription", total=total_seconds)
 
         for segment in segments_iter:
+            if cancel_event and cancel_event.is_set():
+                raise JobCancelledError("Job cancelled")
             words = []
             if segment.words:
                 words = [
@@ -591,7 +598,8 @@ def discover_audio_files(config: Config) -> list[Path]:
 
 def process_file(audio_path: Path, config: Config,
                  on_event: Callable[[dict], None] | None = None,
-                 file_index: int = 0, file_total: int = 1) -> FileResult:
+                 file_index: int = 0, file_total: int = 1,
+                 cancel_event=None) -> FileResult:
     """Run the full transcription pipeline for one audio file."""
     speaker_label = audio_path.stem
     print(f"Transcribing: {audio_path.name} (label: {speaker_label})")
@@ -609,7 +617,8 @@ def process_file(audio_path: Path, config: Config,
             print("  Transcribing speech...")
             transcription = transcribe_file(model, wav_path,
                                             initial_prompt=config.vocab_prompt,
-                                            on_event=on_event)
+                                            on_event=on_event,
+                                            cancel_event=cancel_event)
         # Preserve original filename in output
         transcription.audio_file = audio_path.name
 
