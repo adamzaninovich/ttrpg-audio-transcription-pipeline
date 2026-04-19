@@ -33,6 +33,11 @@ from transcribe import (
 
 app = FastAPI(title="Transcription Service")
 
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
 # ---------------------------------------------------------------------------
 # Job state
 # ---------------------------------------------------------------------------
