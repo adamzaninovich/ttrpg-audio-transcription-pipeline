@@ -1,7 +1,9 @@
 services:
   transcribe:
-    build: .
-    image: transcribe:latest
+    build:
+      context: .
+      target: full
+    image: transcribe:full
     pull_policy: never
     container_name: transcribe
     volumes:
@@ -26,8 +28,10 @@ services:
     profiles:
       - manual
   check:
-    build: .
-    image: transcribe:latest
+    build:
+      context: .
+      target: full
+    image: transcribe:full
     pull_policy: never
     container_name: transcribe-check
     command:
@@ -50,6 +54,36 @@ services:
               count: all
               capabilities:
                 - gpu
+    restart: no
+    profiles:
+      - manual
+  serve:
+    build:
+      context: .
+      target: base
+    image: transcribe:latest
+    pull_policy: never
+    command: uvicorn server:app --host 0.0.0.0 --port 8000 --workers 1
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/models
+    environment:
+      - MODEL_CACHE_DIR=/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities:
+                - gpu
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     restart: no
     profiles:
       - manual

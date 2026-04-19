@@ -18,12 +18,15 @@ import warnings
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import NamedTuple, TypedDict
+from typing import Callable, NamedTuple, TypedDict
 
-import torch
 from faster_whisper import WhisperModel
 
 warnings.filterwarnings("ignore")
+
+
+class JobCancelledError(Exception):
+    """Raised when a transcription job is cancelled via the HTTP API."""
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -172,13 +175,18 @@ def whisper_model(config: Config):
         yield model
     finally:
         del model
-        torch.cuda.empty_cache()
+        try:
+            import torch
+            torch.cuda.empty_cache()
+        except ImportError:
+            pass
         gc.collect()
 
 
 @contextmanager
 def diarization_pipeline(config: Config):
     """Load pyannote diarization pipeline on CUDA, yield it, then free VRAM."""
+    import torch
     from pyannote.audio import Pipeline
 
     torch.zeros(1).cuda()
@@ -330,7 +338,9 @@ def group_words_into_segments(words: list[Word],
 
 
 def transcribe_file(model: WhisperModel, audio_path: Path,
-                    initial_prompt: str | None = None) -> TranscriptionResult:
+                    initial_prompt: str | None = None,
+                    on_event: Callable[[dict], None] | None = None,
+                    cancel_event=None) -> TranscriptionResult:
     """Transcribe a single audio file and return structured result."""
     from rich.progress import Progress, BarColumn, TimeRemainingColumn, TextColumn
 
@@ -338,6 +348,11 @@ def transcribe_file(model: WhisperModel, audio_path: Path,
         language="en",
         word_timestamps=True,
         vad_filter=True,
+        # speech_pad_ms > default (400ms) to avoid clipping speech onsets —
+        # VAD fires late on quiet starts, so we pad aggressively upstream.
+        vad_parameters=dict(speech_pad_ms=800),
+        condition_on_previous_text=False,
+        no_repeat_ngram_size=3,
     )
     if initial_prompt:
         transcribe_kwargs["initial_prompt"] = initial_prompt
@@ -356,6 +371,8 @@ def transcribe_file(model: WhisperModel, audio_path: Path,
         task = progress.add_task("transcription", total=total_seconds)
 
         for segment in segments_iter:
+            if cancel_event and cancel_event.is_set():
+                raise JobCancelledError("Job cancelled")
             words = []
             if segment.words:
                 words = [
@@ -378,6 +395,9 @@ def transcribe_file(model: WhisperModel, audio_path: Path,
             )
 
             progress.update(task, completed=min(int(segment.end), total_seconds))
+            if on_event:
+                pct = min(100, int(segment.end / info.duration * 100))
+                on_event({"type": "progress", "pct": pct})
 
         progress.update(task, completed=total_seconds)
 
@@ -527,8 +547,8 @@ def write_outputs(speaker_label: str, segments: list[Segment],
               include_speaker=use_diarization)
 
 
-def write_merged_output(results: list[FileResult], config: Config) -> None:
-    """Write merged JSON + SRT across all processed files."""
+def write_merged_output(results: list[FileResult], config: Config) -> dict:
+    """Write merged JSON + SRT across all processed files. Returns the merged result."""
     all_segments = []
     for r in results:
         all_segments.extend(r.segments)
@@ -539,13 +559,13 @@ def write_merged_output(results: list[FileResult], config: Config) -> None:
     merged_result = {
         "speakers": [r.speaker_label for r in results],
         "duration": max_duration,
-        "diarization": config.use_diarization,
         "segments": merged_segments,
     }
 
     write_json(merged_result, config.output_dir / "merged.json")
     write_srt(merged_segments, config.output_dir / "merged.srt", include_speaker=True)
     print(f"Merged transcript: {len(merged_segments)} segments -> merged.json, merged.srt")
+    return merged_result
 
 
 # ---------------------------------------------------------------------------
@@ -581,11 +601,18 @@ def discover_audio_files(config: Config) -> list[Path]:
     return audio_files
 
 
-def process_file(audio_path: Path, config: Config) -> FileResult:
+def process_file(audio_path: Path, config: Config,
+                 on_event: Callable[[dict], None] | None = None,
+                 file_index: int = 0, file_total: int = 1,
+                 cancel_event=None) -> FileResult:
     """Run the full transcription pipeline for one audio file."""
     speaker_label = audio_path.stem
     print(f"Transcribing: {audio_path.name} (label: {speaker_label})")
     t0 = time.time()
+
+    if on_event:
+        on_event({"type": "file_start", "file": audio_path.name,
+                  "index": file_index, "total": file_total})
 
     print("  Converting audio to WAV...")
     with temp_wav(audio_path, config.sample_rate) as wav_path:
@@ -594,7 +621,9 @@ def process_file(audio_path: Path, config: Config) -> FileResult:
         with whisper_model(config) as model:
             print("  Transcribing speech...")
             transcription = transcribe_file(model, wav_path,
-                                            initial_prompt=config.vocab_prompt)
+                                            initial_prompt=config.vocab_prompt,
+                                            on_event=on_event,
+                                            cancel_event=cancel_event)
         # Preserve original filename in output
         transcription.audio_file = audio_path.name
 
@@ -638,6 +667,11 @@ def process_file(audio_path: Path, config: Config) -> FileResult:
         f"  Done in {elapsed:.1f}s ({ratio:.1f}x realtime) "
         f"-- {len(segments)} segments, {transcription.duration:.0f}s audio"
     )
+
+    if on_event:
+        on_event({"type": "file_done", "file": audio_path.name,
+                  "duration": round(transcription.duration, 3),
+                  "elapsed": round(elapsed, 3)})
 
     return FileResult(
         speaker_label=speaker_label,
